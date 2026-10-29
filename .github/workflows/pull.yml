@@ -1,0 +1,30 @@
+# 一撃ランキング: 受け口（Cloudflare Workers）の承認済みランキングを 10 分ごとに取りに行き、変わっていれば ranking.json を更新する。
+# GitHub Pages がこのファイルを公開し、JOY:LAND PLAZA の壁の板がそれを読む（VRChat の信頼済みの場所）。トークンは要らない。
+name: pull ranking
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: pull-ranking
+  cancel-in-progress: false
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: fetch
+        run: |
+          curl -fsS --max-time 30 https://joyland-ranking.joyland-ranking.workers.dev/ranking.json -o ranking.new.json
+          python3 -c "import json,sys; d=json.load(open('ranking.new.json',encoding='utf-8')); assert d.get('v')==1 and len(d.get('machines',[]))==5"
+      - name: commit if changed
+        run: |
+          if cmp -s ranking.new.json ranking.json; then rm ranking.new.json; echo "no change"; exit 0; fi
+          mv ranking.new.json ranking.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ranking.json
+          git commit -m "ranking $(TZ=Asia/Tokyo date '+%Y/%m/%d %H:%M')"
+          git push
