@@ -1,5 +1,7 @@
 # 一撃ランキング: 受け口（Cloudflare Workers）の承認済みランキングを 10 分ごとに取りに行き、変わっていれば ranking.json を更新する。
 # GitHub Pages がこのファイルを公開し、JOY:LAND PLAZA の壁の板がそれを読む（VRChat の信頼済みの場所）。トークンは要らない。
+# (2026-11-02 ユーザー「押したから再発防止して」) GitHub Pages の公開が「前の公開が実行中」で失敗し（2026-11-01 17:32・17:51）、リポジトリは新しいのに
+# 壁が読むファイルが古いまま残った。毎回、最後の公開の結果を見て、失敗していれば、または最新のコミットが 5 分たっても公開されていなければ、公開をやり直す。
 name: pull ranking
 on:
   schedule:
@@ -7,6 +9,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  pages: write
+  deployments: read
 concurrency:
   group: pull-ranking
   cancel-in-progress: false
@@ -28,3 +32,22 @@ jobs:
           git add ranking.json
           git commit -m "ranking $(TZ=Asia/Tokyo date '+%Y/%m/%d %H:%M')"
           git push
+      - name: pages health
+        # 最後の Pages の公開（環境 github-pages）: 失敗なら、または最新のコミットの公開がまだ無いまま 5 分たっていれば、公開をやり直す。
+        # 公開中（queued / in_progress）のあいだは待つ（同じ「実行中」で断られないように）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          head=$(git rev-parse HEAD)
+          age=$(( $(date +%s) - $(git log -1 --format=%ct) ))
+          dep=$(gh api "repos/$REPO/deployments?environment=github-pages&per_page=1" --jq '.[0] | "\(.id) \(.sha)"')
+          id=${dep%% *}; sha=${dep##* }
+          state=$(gh api "repos/$REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // "none"')
+          echo "pages: last deployment $id of $sha is $state; head $head, $age s old"
+          if [ "$state" = "queued" ] || [ "$state" = "in_progress" ] || [ "$state" = "pending" ]; then echo "a deployment runs: wait"; exit 0; fi
+          if [ "$state" = "failure" ] || [ "$state" = "error" ] || { [ "$sha" != "$head" ] && [ "$age" -gt 300 ]; }; then
+            gh api -X POST "repos/$REPO/pages/builds" && echo "asked for a new Pages build"
+          else
+            echo "pages up to date"
+          fi
